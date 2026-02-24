@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS public.website_build_jobs (
   repo_url TEXT,
   vercel_url TEXT,
   error_message TEXT,
+  log_entries JSONB NOT NULL DEFAULT '[]',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

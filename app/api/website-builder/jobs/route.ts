@@ -4,8 +4,32 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { listWebsiteBuildJobs } from '@/lib/supabase'
+import { listWebsiteBuildJobs, deleteWebsiteBuildJob } from '@/lib/supabase'
 import { supabase } from '@/lib/supabase'
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const jobId = searchParams.get('jobId')
+    if (!jobId) {
+      return NextResponse.json(
+        { error: 'Missing jobId query parameter' },
+        { status: 400 }
+      )
+    }
+    const { error } = await deleteWebsiteBuildJob(jobId)
+    if (error) {
+      return NextResponse.json({ error }, { status: 500 })
+    }
+    return NextResponse.json({ ok: true })
+  } catch (error) {
+    console.error('Error in website-builder/jobs DELETE:', error)
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    )
+  }
+}
 
 export async function GET(request: NextRequest) {
   try {

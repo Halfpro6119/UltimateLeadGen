@@ -6,7 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getWebsiteBuildJob, getLeadById, updateWebsiteBuildJob } from '@/lib/supabase'
+import { getWebsiteBuildJob, getLeadById, updateWebsiteBuildJob, appendWebsiteBuildJobLog } from '@/lib/supabase'
 import { cleanVercelAlias } from '@/lib/slug'
 import {
   findReadyDeploymentByBranch,
@@ -68,6 +68,10 @@ export async function GET(request: NextRequest) {
           teamId
         )
         const vercelUrl = result.error ? deployment.url : `https://${alias}`
+        if (!result.error) {
+          const ts = new Date().toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          await appendWebsiteBuildJobLog(jobId, `[${ts}] Deployed: ${vercelUrl}`)
+        }
         await updateWebsiteBuildJob(jobId, {
           status: result.error ? job.status : 'deployed',
           vercel_url: vercelUrl,
@@ -86,6 +90,7 @@ export async function GET(request: NextRequest) {
       vercelUrl: job.vercel_url,
       errorMessage: job.error_message,
       cursorAgentId: job.cursor_agent_id,
+      logEntries: job.log_entries ?? [],
       createdAt: job.created_at,
       updatedAt: job.updated_at,
     })

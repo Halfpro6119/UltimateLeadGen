@@ -10,10 +10,16 @@ import {
   getLeadById,
   createWebsiteBuildJob,
   updateWebsiteBuildJob,
+  appendWebsiteBuildJobLog,
 } from '@/lib/supabase'
 import { cleanBranchName } from '@/lib/slug'
 
 const CURSOR_API_BASE = 'https://api.cursor.com/v0'
+
+function logLine(message: string): string {
+  const ts = new Date().toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return `[${ts}] ${message}`
+}
 
 type LeadForPrompt = {
   account_name: string | null
@@ -209,6 +215,7 @@ export async function POST(request: NextRequest) {
 
     const branchErr = await createBranch(githubToken, repo, branchName)
     if (branchErr.error) {
+      await appendWebsiteBuildJobLog(jobId, logLine(`Error: ${branchErr.error}`))
       await updateWebsiteBuildJob(jobId, {
         status: 'failed',
         error_message: branchErr.error,
@@ -218,6 +225,9 @@ export async function POST(request: NextRequest) {
         { status: 502 }
       )
     }
+    await appendWebsiteBuildJobLog(jobId, logLine('Starting build…'))
+    await appendWebsiteBuildJobLog(jobId, logLine(`Branch created: ${branchName}`))
+    await appendWebsiteBuildJobLog(jobId, logLine('Launching Cursor agent…'))
 
     const promptOverrides = {
       business_summary: body.business_summary as string | undefined,
@@ -255,6 +265,7 @@ export async function POST(request: NextRequest) {
 
     if (!cursorRes.ok) {
       const errText = await cursorRes.text()
+      await appendWebsiteBuildJobLog(jobId, logLine(`Error: Cursor API ${cursorRes.status}`))
       await updateWebsiteBuildJob(jobId, {
         status: 'failed',
         error_message: `Cursor API error: ${cursorRes.status} ${errText}`,
@@ -268,10 +279,13 @@ export async function POST(request: NextRequest) {
     const cursorData = (await cursorRes.json()) as { id?: string; agent_id?: string }
     const agentId = cursorData.id ?? cursorData.agent_id ?? null
     if (agentId) {
+      await appendWebsiteBuildJobLog(jobId, logLine('Cursor agent launched. Steps: bulk site, logo, reviews, gallery, production-ready.'))
       await updateWebsiteBuildJob(jobId, {
         cursor_agent_id: agentId,
         status: 'building',
       })
+      await appendWebsiteBuildJobLog(jobId, logLine('Follow-up messages sent.'))
+      await appendWebsiteBuildJobLog(jobId, logLine('Agent is building the site…'))
 
       const followUps = [
         { text: buildPromptLogo(promptLead) },

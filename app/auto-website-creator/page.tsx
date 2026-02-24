@@ -15,7 +15,17 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Sidebar } from '@/components/layout/Sidebar'
-import { Search, Loader2, Save, Rocket, ExternalLink, CheckCircle, XCircle, Send } from 'lucide-react'
+import { Search, Loader2, Save, Rocket, ExternalLink, CheckCircle, XCircle, Send, Trash2, X } from 'lucide-react'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
 type Lead = {
   id: string
@@ -74,9 +84,57 @@ export default function AutoWebsiteCreatorPage() {
 
   const [buildLogs, setBuildLogs] = useState<string[]>([])
   const buildLogEndRef = useRef<HTMLDivElement>(null)
+  const [historyViewLoading, setHistoryViewLoading] = useState<string | null>(null)
+  const [jobToDelete, setJobToDelete] = useState<HistoryJob | null>(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(true)
 
   const displayJobId = selectedJobId ?? jobId
   const displayVercelUrl = selectedVercelUrl ?? vercelUrl
+  const showPreview = previewOpen && !!displayVercelUrl && !!displayJobId
+
+  const handleClosePreview = () => {
+    setPreviewOpen(false)
+  }
+
+  const handleSelectHistoryJob = async (job: HistoryJob) => {
+    setHistoryViewLoading(job.id)
+    setPreviewOpen(true)
+    try {
+      const res = await fetch(`/api/website-builder/status?jobId=${encodeURIComponent(job.id)}`)
+      const data = await res.json()
+      if (!res.ok) return
+      setSelectedJobId(job.id)
+      setSelectedVercelUrl(data.vercelUrl ?? null)
+      setBuildLogs(Array.isArray(data.logEntries) ? data.logEntries : [])
+    } finally {
+      setHistoryViewLoading(null)
+    }
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!jobToDelete) return
+    setDeleteLoading(true)
+    try {
+      const res = await fetch(`/api/website-builder/jobs?jobId=${encodeURIComponent(jobToDelete.id)}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to delete build')
+        return
+      }
+      if (selectedJobId === jobToDelete.id) {
+        setSelectedJobId(null)
+        setSelectedVercelUrl(null)
+        setBuildLogs([])
+        setPreviewOpen(false)
+      }
+      setBuildHistory((prev) => prev.filter((j) => j.id !== jobToDelete.id))
+      toast.success('Build deleted')
+    } finally {
+      setJobToDelete(null)
+      setDeleteLoading(false)
+    }
+  }
 
   const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim())
 
@@ -233,6 +291,7 @@ export default function AutoWebsiteCreatorPage() {
         }
         if (newStatus === 'deployed' && prevStatusRef.current !== 'deployed') {
           addBuildLog(`Deployed: ${data.vercelUrl ?? '—'}`)
+          setPreviewOpen(true)
           toast.success('Site is ready!', {
             description: 'Your site has been built and deployed. Preview it below.',
           })
@@ -246,6 +305,9 @@ export default function AutoWebsiteCreatorPage() {
         setBuildStatus(newStatus)
         setVercelUrl(data.vercelUrl ?? null)
         setBuildError(data.errorMessage ?? null)
+        if (Array.isArray(data.logEntries) && data.logEntries.length > 0) {
+          setBuildLogs(data.logEntries)
+        }
         if (data.status === 'deployed' || data.status === 'failed') {
           if (pollRef.current) {
             clearInterval(pollRef.current)
@@ -511,7 +573,11 @@ export default function AutoWebsiteCreatorPage() {
               {buildHistory.map((job) => (
                 <li
                   key={job.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-3 py-2"
+                  className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 ${
+                    displayJobId === job.id
+                      ? 'border-blue-500 bg-slate-800/80 ring-1 ring-blue-500/30'
+                      : 'border-slate-700 bg-slate-800/50'
+                  }`}
                 >
                   <span className="text-white font-medium">
                     {job.accountName || 'Unknown business'}
@@ -526,30 +592,78 @@ export default function AutoWebsiteCreatorPage() {
                     })}
                   </span>
                   <span className="text-slate-400 text-sm capitalize">{job.status}</span>
-                  {job.vercelUrl ? (
+                  <div className="flex items-center gap-2">
                     <Button
                       size="sm"
                       variant="outline"
                       className="border-slate-600 text-slate-300 hover:bg-slate-700"
-                      onClick={() => {
-                        setSelectedJobId(job.id)
-                        setSelectedVercelUrl(job.vercelUrl)
-                      }}
+                      onClick={() => handleSelectHistoryJob(job)}
+                      disabled={historyViewLoading === job.id}
                     >
-                      Preview
+                      {historyViewLoading === job.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        job.vercelUrl ? 'Preview' : 'View logs'
+                      )}
                     </Button>
-                  ) : (
-                    <span className="text-slate-500 text-sm">No URL yet</span>
-                  )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-slate-400 hover:text-red-400 hover:bg-red-950/30"
+                      onClick={() => setJobToDelete(job)}
+                      title="Delete build"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </li>
               ))}
             </ul>
           )}
         </Card>
 
-        {displayVercelUrl && displayJobId && (
-          <Card className="bg-slate-900 border-slate-800 p-6 mb-6">
-            <h2 className="text-lg font-semibold text-white mb-3">Live preview</h2>
+        <AlertDialog open={!!jobToDelete} onOpenChange={(open) => !open && setJobToDelete(null)}>
+          <AlertDialogContent className="bg-slate-900 border-slate-700 text-white">
+            <AlertDialogHeader>
+              <AlertDialogTitle className="text-white">Delete this build?</AlertDialogTitle>
+              <AlertDialogDescription className="text-slate-400">
+                {jobToDelete
+                  ? `This will permanently remove the build for "${jobToDelete.accountName || 'Unknown business'}" from history. The live site and branch are not affected.`
+                  : ''}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel className="border-slate-600 text-slate-300 hover:bg-slate-800">
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(e) => {
+                  e.preventDefault()
+                  handleConfirmDelete()
+                }}
+                disabled={deleteLoading}
+                className="bg-red-600 hover:bg-red-700 text-white"
+              >
+                {deleteLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Delete'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {showPreview && (
+          <Card className="bg-slate-900 border-slate-800 p-6 mb-6 relative">
+            <div className="flex items-start justify-between gap-4 mb-3">
+              <h2 className="text-lg font-semibold text-white">Live preview</h2>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-slate-400 hover:text-white hover:bg-slate-700 shrink-0"
+                onClick={handleClosePreview}
+                title="Close preview"
+              >
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
             <p className="text-slate-400 text-sm mb-3">
               Preview your site below. If the frame does not load (some hosts block embedding),{' '}
               <a

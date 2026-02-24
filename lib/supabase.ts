@@ -247,6 +247,7 @@ export type WebsiteBuildJobRow = {
   repo_url: string | null
   vercel_url: string | null
   error_message: string | null
+  log_entries: string[]
   created_at: string
   updated_at: string
 }
@@ -283,12 +284,36 @@ export async function updateWebsiteBuildJob(
     status?: WebsiteBuildJobRow['status']
     vercel_url?: string | null
     error_message?: string | null
+    log_entries?: string[]
   }
 ): Promise<{ error: string | null }> {
   const payload: Record<string, unknown> = { ...updates, updated_at: new Date().toISOString() }
   const { error } = await supabase.from('website_build_jobs').update(payload).eq('id', jobId)
   if (error) {
     console.error('Error updateWebsiteBuildJob:', error)
+    return { error: error.message }
+  }
+  return { error: null }
+}
+
+/**
+ * Append a log line to a build job. Line should be preformatted (e.g. "[12:34:56] Message").
+ */
+export async function appendWebsiteBuildJobLog(jobId: string, line: string): Promise<{ error: string | null }> {
+  const job = await getWebsiteBuildJob(jobId)
+  if (!job) return { error: 'Job not found' }
+  const entries = Array.isArray(job.log_entries) ? job.log_entries : []
+  const next = [...entries, line]
+  return updateWebsiteBuildJob(jobId, { log_entries: next })
+}
+
+/**
+ * Delete a website build job by id.
+ */
+export async function deleteWebsiteBuildJob(jobId: string): Promise<{ error: string | null }> {
+  const { error } = await supabase.from('website_build_jobs').delete().eq('id', jobId)
+  if (error) {
+    console.error('Error deleteWebsiteBuildJob:', error)
     return { error: error.message }
   }
   return { error: null }
@@ -307,7 +332,11 @@ export async function getWebsiteBuildJob(jobId: string): Promise<WebsiteBuildJob
     console.error('Error getWebsiteBuildJob:', error)
     return null
   }
-  return data as WebsiteBuildJobRow | null
+  const row = data as Record<string, unknown> | null
+  if (!row) return null
+  const logEntries = row.log_entries
+  const logEntriesArr = Array.isArray(logEntries) ? logEntries.filter((e): e is string => typeof e === 'string') : []
+  return { ...row, log_entries: logEntriesArr } as WebsiteBuildJobRow
 }
 
 /**
