@@ -26,9 +26,25 @@ export function cleanBranchName(accountName: string | null | undefined): string 
 }
 
 /**
- * Clean Vercel alias (subdomain): {slug}.vercel.app (business name only)
+ * Slug for Vercel alias only: no hyphens (e.g. americanpestcontrol).
+ * Subdomains are typically [a-z0-9]; we strip spaces and hyphens for a clean URL.
+ */
+const MAX_VERCEL_ALIAS_LENGTH = 40
+
+export function vercelAliasSlug(name: string | null | undefined): string {
+  if (name == null || String(name).trim() === '') return 'business'
+  let s = String(name)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+  if (s.length > MAX_VERCEL_ALIAS_LENGTH) s = s.slice(0, MAX_VERCEL_ALIAS_LENGTH)
+  return s || 'business'
+}
+
+/**
+ * Clean Vercel alias (subdomain): {slug}.vercel.app (business name, no hyphens)
  */
 export function cleanVercelAlias(accountName: string | null | undefined): string {
-  const slug = sanitizeSlug(accountName)
+  const slug = vercelAliasSlug(accountName)
   return `${slug}.vercel.app`
 }

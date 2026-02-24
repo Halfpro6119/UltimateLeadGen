@@ -8,7 +8,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getWebsiteBuildJob, getLeadById, updateWebsiteBuildJob } from '@/lib/supabase'
 import { cleanVercelAlias } from '@/lib/slug'
-import { findReadyDeploymentByBranch, assignAlias } from '@/lib/vercel'
+import {
+  findReadyDeploymentByBranch,
+  findLatestReadyDeployment,
+  assignAlias,
+} from '@/lib/vercel'
 
 export async function GET(request: NextRequest) {
   try {
@@ -33,16 +37,27 @@ export async function GET(request: NextRequest) {
     if (
       job.status === 'building' &&
       !job.vercel_url &&
-      job.branch_name &&
       vercelToken &&
       projectId
     ) {
-      const deployment = await findReadyDeploymentByBranch(
-        vercelToken,
-        projectId,
-        job.branch_name,
-        teamId
-      )
+      let deployment = null
+      if (job.branch_name) {
+        deployment = await findReadyDeploymentByBranch(
+          vercelToken,
+          projectId,
+          job.branch_name,
+          teamId
+        )
+      }
+      if (!deployment) {
+        const jobCreatedMs = job.created_at ? new Date(job.created_at).getTime() : undefined
+        deployment = await findLatestReadyDeployment(
+          vercelToken,
+          projectId,
+          teamId,
+          jobCreatedMs
+        )
+      }
       if (deployment) {
         const lead = await getLeadById(job.lead_id)
         const alias = cleanVercelAlias(lead?.account_name ?? null)

@@ -27,12 +27,13 @@ import {
   CheckCircle,
   Clock,
   RefreshCw,
+  Square,
   Zap,
   ListChecks,
 } from 'lucide-react'
 import { createClient } from '@supabase/supabase-js'
 
-type UiStatus = 'idle' | 'initializing' | 'running' | 'completed' | 'error'
+type UiStatus = 'idle' | 'initializing' | 'running' | 'completed' | 'cancelled' | 'error'
 
 interface ScraperProgressRow {
   run_key: string
@@ -68,16 +69,19 @@ interface ScraperEventRow {
   created_at: string
 }
 
+/** Matches public."Roofing Leads New" schema */
 interface Business {
-  id: string
-  title: string
-  address: string
-  phone_number?: string | null
-  rating?: string | null
-  webpage?: string | null
-  category?: string | null
-  map_link?: string | null
-  created_at: string
+  RowNumber: number
+  title: string | null
+  map_link: string | null
+  cover_image: string | null
+  rating: string | null
+  category: string | null
+  address: string | null
+  webpage: string | null
+  phone_number: string | null
+  working_hours: string | null
+  Used: boolean
 }
 
 export default function AutoBusinessFinderPage() {
@@ -102,6 +106,7 @@ export default function AutoBusinessFinderPage() {
 
   // Keep track of polling interval so we can stop it
   const pollRef = useRef<NodeJS.Timeout | null>(null)
+  const [isStopping, setIsStopping] = useState(false)
 
   /**
    * Fetch live businesses from Supabase so the user sees rows being added.
@@ -120,7 +125,7 @@ export default function AutoBusinessFinderPage() {
       const { data, error } = await supabase
         .from('Roofing Leads New')
         .select('*')
-        .order('created_at', { ascending: false })
+        .order('RowNumber', { ascending: false })
         .limit(50)
 
       if (!error) setBusinesses((data as Business[]) || [])
@@ -248,6 +253,8 @@ export default function AutoBusinessFinderPage() {
         return 'bg-blue-500/10 border-blue-500/20'
       case 'completed':
         return 'bg-green-500/10 border-green-500/20'
+      case 'cancelled':
+        return 'bg-amber-500/10 border-amber-500/20'
       case 'error':
         return 'bg-red-500/10 border-red-500/20'
       default:
@@ -263,12 +270,16 @@ export default function AutoBusinessFinderPage() {
         return <Clock className="text-blue-400 animate-spin" size={20} />
       case 'completed':
         return <CheckCircle className="text-green-400" size={20} />
+      case 'cancelled':
+        return <Square className="text-amber-400" size={20} />
       case 'error':
         return <AlertCircle className="text-red-400" size={20} />
       default:
         return <Zap className="text-slate-400" size={20} />
     }
   }
+
+  const canStopRun = uiStatus === 'initializing' || uiStatus === 'running'
 
   // Progress % is computed from searches_processed / total_searches (not fixed 1000)
   const progressPct = useMemo(() => {
@@ -284,6 +295,74 @@ export default function AutoBusinessFinderPage() {
     return `https://github.com/rileywebboost-afk/UltimateLeadGen/actions/runs/${id}`
   }, [progress?.github_run_id, workflowId])
 
+  /** Restore active or latest run when user returns to the page. */
+  useEffect(() => {
+    let cancelled = false
+
+    async function restoreRun() {
+      const res = await fetch('/api/scraper-progress/active')
+      if (!res.ok || cancelled) return
+
+      const data = await res.json()
+      const rk = data.runKey
+      const p: ScraperProgressRow | null = data.progress
+      const evts: ScraperEventRow[] = data.events || []
+
+      if (!rk || !p) return
+
+      setRunKey(rk)
+      setProgress(p)
+      setEvents(evts)
+      setWorkflowId(p.github_run_id || null)
+
+      if (p.status === 'failed') {
+        setUiStatus('error')
+        setStatusMessage(p.error_message || 'Scraper failed. Check timeline for details.')
+        setIsLoading(false)
+        return
+      }
+
+      if (p.status === 'completed') {
+        setUiStatus('completed')
+        setStatusMessage(
+          `Completed: inserted/skipped ${p.businesses_inserted_or_skipped ?? 0} businesses. Marked used ${p.searches_marked_used ?? 0} searches.`
+        )
+        setIsLoading(false)
+        fetchLiveBusinesses()
+        return
+      }
+
+      // initializing or running
+      setUiStatus(p.status === 'initializing' ? 'initializing' : 'running')
+      const searchPart = p.current_search
+        ? `Current search: "${p.current_search}" (${p.current_search_index ?? '?'}/${p.total_searches ?? '?'})`
+        : 'Preparing search…'
+      const counters = `Extracted: ${p.businesses_extracted ?? 0} • Inserted/skipped: ${p.businesses_inserted_or_skipped ?? 0} • Searches used: ${p.searches_marked_used ?? 0}`
+      setStatusMessage(`${searchPart} • ${p.current_action || 'working'} • ${counters}`)
+
+      if (p.status === 'initializing' || p.status === 'running') {
+        setIsLoading(true)
+        if (pollRef.current) clearInterval(pollRef.current)
+        pollRef.current = setInterval(async () => {
+          if (cancelled) return
+          await fetchProgress(rk)
+          await fetchLiveBusinesses()
+        }, 5000)
+      }
+
+      fetchLiveBusinesses()
+    }
+
+    restoreRun()
+    return () => {
+      cancelled = true
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [])
+
   // Cleanup polling on unmount
   useEffect(() => {
     return () => {
@@ -294,6 +373,49 @@ export default function AutoBusinessFinderPage() {
   const handleRefresh = async () => {
     if (runKey) await fetchProgress(runKey)
     await fetchLiveBusinesses()
+  }
+
+  /** Cancel the current GitHub Actions run and stop polling. */
+  const handleStopScraper = async () => {
+    const runId = progress?.github_run_id || workflowId
+    if (!runId || runId === 'unknown') {
+      setStatusMessage('Run ID not available yet. Try again in a few seconds.')
+      return
+    }
+
+    setIsStopping(true)
+    try {
+      const res = await fetch('/api/cancel-scraper', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workflowId: runId }),
+      })
+      const data = await res.json()
+
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+      setIsLoading(false)
+      setUiStatus('cancelled')
+      setStatusMessage(
+        res.ok
+          ? 'Run cancellation requested. The workflow may take a moment to stop.'
+          : (data.error as string) || 'Failed to cancel run.'
+      )
+    } catch (e) {
+      setUiStatus('error')
+      setStatusMessage(
+        `Error stopping scraper: ${e instanceof Error ? e.message : 'Unknown error'}`
+      )
+      setIsLoading(false)
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    } finally {
+      setIsStopping(false)
+    }
   }
 
   return (
@@ -341,15 +463,29 @@ export default function AutoBusinessFinderPage() {
                   )}
                 </div>
 
-                <Button
-                  onClick={handleRefresh}
-                  variant="outline"
-                  size="sm"
-                  className="gap-2"
-                >
-                  <RefreshCw size={16} />
-                  Refresh
-                </Button>
+                <div className="flex items-center gap-2">
+                  {canStopRun && (
+                    <Button
+                      onClick={handleStopScraper}
+                      disabled={isStopping}
+                      variant="outline"
+                      size="sm"
+                      className="gap-2 border-amber-500/50 text-amber-400 hover:bg-amber-500/10"
+                    >
+                      <Square size={16} />
+                      {isStopping ? 'Stopping…' : 'Stop run'}
+                    </Button>
+                  )}
+                  <Button
+                    onClick={handleRefresh}
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                  >
+                    <RefreshCw size={16} />
+                    Refresh
+                  </Button>
+                </div>
               </div>
 
               {/* Progress Bar */}
@@ -533,12 +669,12 @@ export default function AutoBusinessFinderPage() {
                 <tbody>
                   {businesses.map((b) => (
                     <tr
-                      key={b.id}
+                      key={b.RowNumber}
                       className="border-b border-slate-800 hover:bg-slate-800/50 transition-colors"
                     >
-                      <td className="py-3 px-4 text-slate-200">{b.title}</td>
+                      <td className="py-3 px-4 text-slate-200">{b.title ?? '-'}</td>
                       <td className="py-3 px-4 text-slate-400 text-xs">
-                        {b.address}
+                        {b.address ?? '-'}
                       </td>
                       <td className="py-3 px-4 text-slate-400">
                         {b.phone_number || '-'}

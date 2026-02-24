@@ -15,7 +15,7 @@ import { cleanBranchName } from '@/lib/slug'
 
 const CURSOR_API_BASE = 'https://api.cursor.com/v0'
 
-function buildPrompt(lead: {
+type LeadForPrompt = {
   account_name: string | null
   account_website: string | null
   business_summary: string | null
@@ -23,38 +23,69 @@ function buildPrompt(lead: {
   site_issues: string | null
   industry: string | null
   contact_name: string | null
-}): string {
-  const name = lead.account_name || 'Unknown business'
-  const summary = lead.business_summary || '(No summary provided)'
-  const painPoints = lead.pain_points || '(None specified)'
-  const siteIssues = lead.site_issues || '(None specified)'
-  const industry = lead.industry ? `Industry: ${lead.industry}.` : ''
-  const website = lead.account_website ? `Current website: ${lead.account_website}.` : ''
+}
 
-  return `Build a small, production-ready business website for the following client.
+function leadContext(lead: LeadForPrompt): { name: string; website: string; industry: string; summary: string; painPoints: string; siteIssues: string } {
+  return {
+    name: lead.account_name || 'Unknown business',
+    website: lead.account_website ? `Current website: ${lead.account_website}.` : '',
+    industry: lead.industry ? `Industry: ${lead.industry}.` : '',
+    summary: lead.business_summary || '(No summary provided)',
+    painPoints: lead.pain_points || '(None specified)',
+    siteIssues: lead.site_issues || '(None specified)',
+  }
+}
 
-Business name: ${name}
-${website}
-${industry}
+/** Message 1: Build the bulk of the site (structure, copy, no logo/reviews/gallery yet). */
+function buildPromptBulk(lead: LeadForPrompt): string {
+  const c = leadContext(lead)
+  return `Build the main structure and content for a business website for this client. Do not add logo, reviews, or gallery images yet—those will come in follow-up steps.
+
+Business name: ${c.name}
+${c.website}
+${c.industry}
 
 Summary of the business:
-${summary}
+${c.summary}
 
 Pain points to address:
-${painPoints}
+${c.painPoints}
 
 Current site issues (fix or avoid these):
-${siteIssues}
+${c.siteIssues}
 
 Requirements:
 - Use the existing project structure in this repository. If the repo is empty or has a template, create a clean static site or simple framework (e.g. Next.js, Vite, or plain HTML/CSS/JS).
-- Find and add the business's actual logo: look on their current website or their social media profiles (e.g. Facebook, LinkedIn) and use the real logo, not a placeholder.
-- Find and use their real reviews: pull genuine testimonials or star ratings from their website, Google, or social profiles—do not invent reviews.
-- Find and use their real images for the gallery: source actual photos from their website or social media (team, work, premises, services) for any gallery or image sections—no stock placeholders.
-- Make the site professional, fast, and mobile-friendly.
-- Address the pain points and site issues above where relevant.
-- Ensure the site is production-ready: valid markup, optimized assets, no broken links or placeholder content, and ready to go live.
+- Create the layout, navigation, sections (hero, about, services, contact, etc.), and copy. Use placeholder areas for logo, reviews, and gallery if needed.
+- Make it professional, fast, and mobile-friendly. Address the pain points and site issues above where relevant.
 - Commit all changes to this branch. Do not create a new branch.`
+}
+
+/** Message 2: Get and add the business's actual logo. */
+function buildPromptLogo(lead: LeadForPrompt): string {
+  const c = leadContext(lead)
+  const site = lead.account_website || 'their current website'
+  return `Find and add this business's actual logo. Business name: ${c.name}. Look on ${site} or their social media profiles (e.g. Facebook, LinkedIn), download or reference the real logo image, and replace any placeholder logo in the site with it. Do not use a generic or stock logo. Commit your changes to this branch.`
+}
+
+/** Message 3: Get and use their real reviews. */
+function buildPromptReviews(lead: LeadForPrompt): string {
+  const c = leadContext(lead)
+  const site = lead.account_website || 'their website'
+  return `Find and add this business's real reviews and testimonials. Business name: ${c.name}. Pull genuine testimonials or star ratings from ${site}, Google, or their social profiles. Add a reviews/testimonials section (or update the existing one) with real quotes and ratings—do not invent or fake any reviews. Commit your changes to this branch.`
+}
+
+/** Message 4: Get and use their real images for the gallery. */
+function buildPromptGallery(lead: LeadForPrompt): string {
+  const c = leadContext(lead)
+  const site = lead.account_website || 'their website'
+  return `Find and add real images for this business's gallery. Business name: ${c.name}. Source actual photos from ${site} or their social media (team, work, premises, services, before/after, etc.) and use them in the gallery or image sections. Replace any stock or placeholder images—no generic stock photos. Commit your changes to this branch.`
+}
+
+/** Message 5: Make the site production-ready. */
+function buildPromptProductionReady(lead: LeadForPrompt): string {
+  const c = leadContext(lead)
+  return `Make this site production-ready. Business: ${c.name}. Ensure: valid markup, optimized assets (compress images, minify where appropriate), no broken links or placeholder content, correct meta tags and titles, and that the site is ready to go live. Fix any lint or build errors. Do a final commit to this branch.`
 }
 
 /**
@@ -205,16 +236,16 @@ export async function POST(request: NextRequest) {
         site_issues: promptOverrides.site_issues,
       }),
     }
-    const promptText = buildPrompt(promptLead)
+    const headers = {
+      Authorization: `Bearer ${cursorApiKey}`,
+      'Content-Type': 'application/json',
+    }
 
     const cursorRes = await fetch(`${CURSOR_API_BASE}/agents`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${cursorApiKey}`,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
-        prompt: { text: promptText },
+        prompt: { text: buildPromptBulk(promptLead) },
         source: {
           repository: repoFullUrl,
           ref: branchName,
@@ -241,6 +272,24 @@ export async function POST(request: NextRequest) {
         cursor_agent_id: agentId,
         status: 'building',
       })
+
+      const followUps = [
+        { text: buildPromptLogo(promptLead) },
+        { text: buildPromptReviews(promptLead) },
+        { text: buildPromptGallery(promptLead) },
+        { text: buildPromptProductionReady(promptLead) },
+      ]
+      for (const followUp of followUps) {
+        await new Promise((r) => setTimeout(r, 1500))
+        const followRes = await fetch(`${CURSOR_API_BASE}/agents/${agentId}/followup`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ prompt: followUp }),
+        })
+        if (!followRes.ok) {
+          console.warn('Cursor follow-up failed:', followRes.status, await followRes.text())
+        }
+      }
     }
 
     return NextResponse.json({
@@ -249,7 +298,7 @@ export async function POST(request: NextRequest) {
       branchName,
       repoUrl: repoFullUrl,
       cursorAgentId: agentId,
-      message: 'Build started. Cursor agent is generating the website.',
+      message: 'Build started. Cursor agent is generating the website (5 steps: bulk, logo, reviews, gallery, production-ready).',
     })
   } catch (error) {
     console.error('Error in website-builder/build:', error)

@@ -309,3 +309,19 @@ export async function getWebsiteBuildJob(jobId: string): Promise<WebsiteBuildJob
   }
   return data as WebsiteBuildJobRow | null
 }
+
+/**
+ * List website build jobs, most recent first.
+ */
+export async function listWebsiteBuildJobs(limit = 50): Promise<WebsiteBuildJobRow[]> {
+  const { data, error } = await supabase
+    .from('website_build_jobs')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error) {
+    console.error('Error listWebsiteBuildJobs:', error)
+    return []
+  }
+  return (data as WebsiteBuildJobRow[]) ?? []
+}

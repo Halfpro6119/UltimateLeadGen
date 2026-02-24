@@ -8,13 +8,14 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Sidebar } from '@/components/layout/Sidebar'
-import { Search, Loader2, Save, Rocket, ExternalLink, CheckCircle, XCircle } from 'lucide-react'
+import { Search, Loader2, Save, Rocket, ExternalLink, CheckCircle, XCircle, Send } from 'lucide-react'
 
 type Lead = {
   id: string
@@ -30,6 +31,17 @@ type Lead = {
 }
 
 type BuildStatus = 'idle' | 'pending' | 'building' | 'deployed' | 'failed'
+
+type HistoryJob = {
+  id: string
+  leadId: string
+  status: string
+  vercelUrl: string | null
+  branchName: string | null
+  repoUrl: string | null
+  createdAt: string
+  accountName: string | null
+}
 
 export default function AutoWebsiteCreatorPage() {
   const [lookupInput, setLookupInput] = useState('')
@@ -49,6 +61,19 @@ export default function AutoWebsiteCreatorPage() {
   const [repoUrl, setRepoUrl] = useState<string | null>(null)
   const [vercelUrl, setVercelUrl] = useState<string | null>(null)
   const pollRef = useRef<NodeJS.Timeout | null>(null)
+  const prevStatusRef = useRef<BuildStatus>('idle')
+
+  const [buildHistory, setBuildHistory] = useState<HistoryJob[]>([])
+  const [historyLoading, setHistoryLoading] = useState(true)
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null)
+  const [selectedVercelUrl, setSelectedVercelUrl] = useState<string | null>(null)
+
+  const [editMessage, setEditMessage] = useState('')
+  const [editLoading, setEditLoading] = useState(false)
+  const [editFeedback, setEditFeedback] = useState<string | null>(null)
+
+  const displayJobId = selectedJobId ?? jobId
+  const displayVercelUrl = selectedVercelUrl ?? vercelUrl
 
   const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim())
 
@@ -115,12 +140,31 @@ export default function AutoWebsiteCreatorPage() {
     }
   }
 
+  const fetchHistory = async () => {
+    setHistoryLoading(true)
+    try {
+      const res = await fetch('/api/website-builder/jobs?limit=30')
+      const data = await res.json()
+      if (res.ok && Array.isArray(data.jobs)) setBuildHistory(data.jobs)
+    } catch {
+      // ignore
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchHistory()
+  }, [])
+
   const handleBuild = async () => {
     if (!lead?.id) return
     setBuildLoading(true)
     setBuildError(null)
     setBuildStatus('idle')
     setJobId(null)
+    setSelectedJobId(null)
+    setSelectedVercelUrl(null)
     try {
       const res = await fetch('/api/website-builder/build', {
         method: 'POST',
@@ -156,12 +200,19 @@ export default function AutoWebsiteCreatorPage() {
         const res = await fetch(`/api/website-builder/status?jobId=${encodeURIComponent(jobId)}`)
         const data = await res.json()
         if (!res.ok) return
-        setBuildStatus(
+        const newStatus: BuildStatus =
           data.status === 'deployed' ? 'deployed'
           : data.status === 'failed' ? 'failed'
           : data.status === 'building' ? 'building'
           : 'pending'
-        )
+        if (newStatus === 'deployed' && prevStatusRef.current !== 'deployed') {
+          toast.success('Site is ready!', {
+            description: 'Your site has been built and deployed. Preview it below.',
+          })
+          fetchHistory()
+        }
+        prevStatusRef.current = newStatus
+        setBuildStatus(newStatus)
         setVercelUrl(data.vercelUrl ?? null)
         setBuildError(data.errorMessage ?? null)
         if (data.status === 'deployed' || data.status === 'failed') {
@@ -180,6 +231,33 @@ export default function AutoWebsiteCreatorPage() {
       if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [jobId])
+
+  const handleSendEdit = async () => {
+    if (!displayJobId || !editMessage.trim()) return
+    setEditLoading(true)
+    setEditFeedback(null)
+    try {
+      const res = await fetch('/api/website-builder/send-edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: displayJobId, message: editMessage.trim() }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setEditFeedback('Edit request sent. The agent will apply changes and push to the branch.')
+        setEditMessage('')
+        toast.success('Message sent to agent')
+      } else {
+        setEditFeedback(data.error || 'Failed to send.')
+        toast.error(data.error || 'Failed to send')
+      }
+    } catch {
+      setEditFeedback('Network error')
+      toast.error('Network error')
+    } finally {
+      setEditLoading(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -368,6 +446,116 @@ export default function AutoWebsiteCreatorPage() {
                   </a>
                 </p>
               )}
+            </div>
+          </Card>
+        )}
+
+        <Card className="bg-slate-900 border-slate-800 p-6 mb-6">
+          <h2 className="text-lg font-semibold text-white mb-3">Build history</h2>
+          <p className="text-slate-400 text-sm mb-3">
+            Past websites. Click Preview to open the live site and request edits.
+          </p>
+          {historyLoading ? (
+            <p className="text-slate-400 text-sm flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+            </p>
+          ) : buildHistory.length === 0 ? (
+            <p className="text-slate-500 text-sm">No builds yet.</p>
+          ) : (
+            <ul className="space-y-2">
+              {buildHistory.map((job) => (
+                <li
+                  key={job.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-700 bg-slate-800/50 px-3 py-2"
+                >
+                  <span className="text-white font-medium">
+                    {job.accountName || 'Unknown business'}
+                  </span>
+                  <span className="text-slate-400 text-sm">
+                    {new Date(job.createdAt).toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                  <span className="text-slate-400 text-sm capitalize">{job.status}</span>
+                  {job.vercelUrl ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="border-slate-600 text-slate-300 hover:bg-slate-700"
+                      onClick={() => {
+                        setSelectedJobId(job.id)
+                        setSelectedVercelUrl(job.vercelUrl)
+                      }}
+                    >
+                      Preview
+                    </Button>
+                  ) : (
+                    <span className="text-slate-500 text-sm">No URL yet</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+
+        {displayVercelUrl && displayJobId && (
+          <Card className="bg-slate-900 border-slate-800 p-6 mb-6">
+            <h2 className="text-lg font-semibold text-white mb-3">Live preview</h2>
+            <p className="text-slate-400 text-sm mb-3">
+              Preview your site below. If the frame does not load (some hosts block embedding),{' '}
+              <a
+                href={displayVercelUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-400 hover:underline"
+              >
+                open it in a new tab
+              </a>
+              .
+            </p>
+            <div className="rounded-lg border border-slate-700 overflow-hidden bg-white min-h-[480px]">
+              <iframe
+                title="Site preview"
+                src={displayVercelUrl}
+                className="w-full h-[70vh] min-h-[480px] border-0"
+                sandbox="allow-scripts allow-same-origin allow-popups"
+              />
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-slate-700">
+              <h3 className="text-base font-medium text-white mb-2">Request edits</h3>
+              <p className="text-slate-400 text-sm mb-3">
+                Send a message to the Cursor agent to make changes (e.g. fix copy, update colors, add a section). The agent will push updates to the branch and Vercel will redeploy.
+              </p>
+              <div className="flex flex-col gap-2">
+                <Textarea
+                  placeholder="e.g. Make the hero headline shorter and add a CTA button"
+                  value={editMessage}
+                  onChange={(e) => setEditMessage(e.target.value)}
+                  rows={3}
+                  className="bg-slate-800 border-slate-700 text-white placeholder:text-slate-500"
+                />
+                <Button
+                  onClick={handleSendEdit}
+                  disabled={editLoading || !editMessage.trim()}
+                  variant="outline"
+                  className="w-fit border-slate-600 text-slate-300 hover:bg-slate-800"
+                >
+                  {editLoading ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  ) : (
+                    <Send className="h-4 w-4 mr-2" />
+                  )}
+                  Send to agent
+                </Button>
+                {editFeedback && (
+                  <p className="text-slate-400 text-sm">{editFeedback}</p>
+                )}
+              </div>
             </div>
           </Card>
         )}
