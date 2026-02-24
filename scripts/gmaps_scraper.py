@@ -37,7 +37,7 @@ from scraper_monitor import build_monitor
 # ----------------------------
 MAX_RESULTS_PER_SEARCH = int(os.getenv("MAX_RESULTS_PER_SEARCH", "20"))
 NAV_TIMEOUT_MS = int(os.getenv("NAV_TIMEOUT_MS", "90000"))
-ACTION_TIMEOUT_MS = int(os.getenv("ACTION_TIMEOUT_MS", "20000"))
+ACTION_TIMEOUT_MS = int(os.getenv("ACTION_TIMEOUT_MS", "35000"))
 
 DEBUG_DIR = Path(os.getenv("DEBUG_DIR", "artifacts/debug"))
 DEBUG_MAX_PAGES = int(os.getenv("DEBUG_MAX_PAGES", "8"))
@@ -121,9 +121,14 @@ async def detect_blocked(page: Page) -> bool:
 
 
 async def maybe_accept_consent(page: Page) -> None:
-    """Attempt to accept cookie/consent dialogs if they appear."""
+    """Attempt to accept cookie/consent dialogs if they appear.
 
-    # These vary by geo. We try a few common button texts.
+    Google sometimes uses div[role=button] for consent; we try real buttons first,
+    then fall back to role=button with matching text (short timeout to avoid
+    blocking on unrelated buttons).
+    """
+
+    # Real <button> elements with common consent text
     candidates = [
         "button:has-text('Accept all')",
         "button:has-text('I agree')",
@@ -135,13 +140,24 @@ async def maybe_accept_consent(page: Page) -> None:
         try:
             btn = page.locator(sel).first
             if await btn.count():
-                # Only click if visible
                 if await btn.is_visible():
-                    await btn.click(timeout=1500)
+                    await btn.click(timeout=3000)
                     await page.wait_for_timeout(800)
                     return
         except Exception:
             continue
+
+    # Fallback: Maps often uses div[role=button] for consent; only match if text suggests consent
+    consent_texts = ("Accept all", "I agree", "Accept", "Agree", "Accept all cookies")
+    try:
+        for text in consent_texts:
+            loc = page.get_by_role("button", name=text)
+            if await loc.count() > 0:
+                await loc.first.click(timeout=3000)
+                await page.wait_for_timeout(800)
+                return
+    except Exception:
+        pass
 
 
 # ----------------------------
@@ -303,11 +319,11 @@ async def collect_place_links(page: Page, search_index: int, monitor, max_needed
     hrefs: list[str] = []
     seen: set[str] = set()
 
-    # Primary: left results feed
+    # Primary: left results feed (allow extra time for slow Maps / consent)
     feed = page.locator("div[role='feed']").first
 
     try:
-        await feed.wait_for(timeout=15000)
+        await feed.wait_for(state="visible", timeout=25000)
     except Exception:
         # Fallback: still try global anchors
         await monitor.log_event("FEED_NOT_FOUND", "Results feed not found; falling back to global anchors", level="warn")
@@ -372,8 +388,9 @@ async def scrape_search(page: Page, search_query: str, search_index: int, total_
 
     try:
         await page.goto(search_url, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
-        await page.wait_for_timeout(1200)
+        await page.wait_for_timeout(2200)
         await maybe_accept_consent(page)
+        await page.wait_for_timeout(1000)
 
         if await detect_blocked(page):
             await write_debug(page, f"blocked_search{search_index}")

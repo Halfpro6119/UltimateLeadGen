@@ -44,9 +44,9 @@ jobs:
           RUN_KEY: ${{ github.event.inputs.timestamp }}
           # Nice-to-have: expose GitHub run id so we can link to the exact run.
           GITHUB_RUN_ID: ${{ github.run_id }}
-          # Optional tuning
+          # Optional tuning (higher ACTION_TIMEOUT_MS helps slow Maps UI / consent)
           NAV_TIMEOUT_MS: 90000
-          ACTION_TIMEOUT_MS: 20000
+          ACTION_TIMEOUT_MS: 35000
           MAX_RESULTS_PER_SEARCH: 20
         run: |
           python scripts/gmaps_scraper.py

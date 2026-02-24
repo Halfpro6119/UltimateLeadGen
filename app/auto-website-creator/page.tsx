@@ -72,10 +72,18 @@ export default function AutoWebsiteCreatorPage() {
   const [editLoading, setEditLoading] = useState(false)
   const [editFeedback, setEditFeedback] = useState<string | null>(null)
 
+  const [buildLogs, setBuildLogs] = useState<string[]>([])
+  const buildLogEndRef = useRef<HTMLDivElement>(null)
+
   const displayJobId = selectedJobId ?? jobId
   const displayVercelUrl = selectedVercelUrl ?? vercelUrl
 
   const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim())
+
+  const addBuildLog = (message: string) => {
+    const ts = new Date().toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    setBuildLogs((prev) => [...prev, `[${ts}] ${message}`])
+  }
 
   const handleLookup = async () => {
     const q = lookupInput.trim()
@@ -157,6 +165,10 @@ export default function AutoWebsiteCreatorPage() {
     fetchHistory()
   }, [])
 
+  useEffect(() => {
+    buildLogEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [buildLogs])
+
   const handleBuild = async () => {
     if (!lead?.id) return
     setBuildLoading(true)
@@ -165,6 +177,11 @@ export default function AutoWebsiteCreatorPage() {
     setJobId(null)
     setSelectedJobId(null)
     setSelectedVercelUrl(null)
+    setBuildLogs([])
+
+    addBuildLog('Starting build…')
+    addBuildLog('Creating branch and launching Cursor agent…')
+
     try {
       const res = await fetch('/api/website-builder/build', {
         method: 'POST',
@@ -178,15 +195,20 @@ export default function AutoWebsiteCreatorPage() {
       })
       const data = await res.json()
       if (!res.ok) {
+        addBuildLog(`Error: ${data.error || 'Build failed'}`)
         setBuildError(data.error || 'Build failed')
         setBuildLoading(false)
         return
       }
+      addBuildLog(`Branch created: ${data.branchName ?? '—'}`)
+      addBuildLog('Cursor agent launched. Steps: bulk site, logo, reviews, gallery, production-ready.')
+      addBuildLog('Waiting for agent and Vercel deployment…')
       setJobId(data.jobId)
       setBranchName(data.branchName ?? null)
       setRepoUrl(data.repoUrl ?? null)
       setBuildStatus('pending')
     } catch {
+      addBuildLog('Network error')
       setBuildError('Network error')
     } finally {
       setBuildLoading(false)
@@ -205,12 +227,21 @@ export default function AutoWebsiteCreatorPage() {
           : data.status === 'failed' ? 'failed'
           : data.status === 'building' ? 'building'
           : 'pending'
+
+        if (newStatus === 'building' && prevStatusRef.current !== 'building') {
+          addBuildLog('Agent is building the site…')
+        }
         if (newStatus === 'deployed' && prevStatusRef.current !== 'deployed') {
+          addBuildLog(`Deployed: ${data.vercelUrl ?? '—'}`)
           toast.success('Site is ready!', {
             description: 'Your site has been built and deployed. Preview it below.',
           })
           fetchHistory()
         }
+        if (newStatus === 'failed' && prevStatusRef.current !== 'failed') {
+          addBuildLog(`Build failed: ${data.errorMessage ?? 'Unknown error'}`)
+        }
+
         prevStatusRef.current = newStatus
         setBuildStatus(newStatus)
         setVercelUrl(data.vercelUrl ?? null)
@@ -445,6 +476,20 @@ export default function AutoWebsiteCreatorPage() {
                     {vercelUrl} <ExternalLink className="h-3 w-3" />
                   </a>
                 </p>
+              )}
+
+              {buildLogs.length > 0 && (
+                <div className="mt-4 rounded-lg border border-slate-700 bg-slate-800/80 overflow-hidden">
+                  <div className="px-3 py-2 border-b border-slate-700 text-slate-300 text-sm font-medium">
+                    Build log
+                  </div>
+                  <div className="p-3 max-h-48 overflow-y-auto font-mono text-xs text-slate-300 whitespace-pre-wrap">
+                    {buildLogs.map((line, i) => (
+                      <div key={i}>{line}</div>
+                    ))}
+                    <div ref={buildLogEndRef} />
+                  </div>
+                </div>
               )}
             </div>
           </Card>
