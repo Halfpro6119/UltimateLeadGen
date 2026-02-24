@@ -13,7 +13,17 @@ const path = require("path");
 const nextDir = path.join(process.cwd(), "node_modules", "next");
 if (fs.existsSync(nextDir)) {
   console.log("Removing node_modules/next...");
-  fs.rmSync(nextDir, { recursive: true, maxRetries: 3 });
+  try {
+    fs.rmSync(nextDir, {
+      recursive: true,
+      maxRetries: 3,
+      retryDelay: 200,
+    });
+  } catch (err) {
+    console.error("Failed to remove node_modules/next:", err.message);
+    console.error("If the project is in OneDrive: pause sync for this folder, then manually delete node_modules/next and run this script again.");
+    process.exit(1);
+  }
 }
 console.log("Installing next@15.5.6...");
 execSync("npm install next@15.5.6", { stdio: "inherit", cwd: process.cwd() });

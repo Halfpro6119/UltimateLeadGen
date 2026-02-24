@@ -6,6 +6,8 @@
     "predev": "node scripts/check-next-find-up.js",
     "dev": "npx next dev --turbopack",
     "fix-next-find-up": "node scripts/fix-next-find-up.js",
+    "fix-lightningcss": "node scripts/fix-lightningcss.js",
+    "fix-optional-deps": "node scripts/fix-optional-deps.js",
     "build": "next build --turbopack",
     "start": "next start",
     "lint": "eslint"

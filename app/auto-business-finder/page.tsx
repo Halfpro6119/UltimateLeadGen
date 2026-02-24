@@ -123,7 +123,7 @@ export default function AutoBusinessFinderPage() {
         .order('created_at', { ascending: false })
         .limit(50)
 
-      if (!error) setBusinesses((data as any) || [])
+      if (!error) setBusinesses((data as Business[]) || [])
     } catch {
       // ignore - we still can show progress without businesses list
     }

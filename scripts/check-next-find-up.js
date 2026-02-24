@@ -15,7 +15,11 @@ if (!exists) {
   const nextDir = path.join(process.cwd(), "node_modules", "next");
   if (fs.existsSync(nextDir)) {
     try {
-      fs.rmSync(nextDir, { recursive: true, maxRetries: 3 });
+      fs.rmSync(nextDir, {
+        recursive: true,
+        maxRetries: 3,
+        retryDelay: 200,
+      });
     } catch (_) {}
     execSync("npm install next@15.5.6", { stdio: "inherit", cwd: process.cwd() });
   }

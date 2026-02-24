@@ -85,10 +85,10 @@ export async function POST(request: NextRequest) {
       const runsData = await runsResponse.json()
       // pick the most recent run that is queued/in_progress
       const run = (runsData.workflow_runs || []).find(
-        (r: any) => r.status === 'in_progress' || r.status === 'queued'
+        (r: { status?: string; id?: number }) => r.status === 'in_progress' || r.status === 'queued'
       )
       workflowId = run?.id ? String(run.id) : 'unknown'
-    } catch (e) {
+    } catch {
       // ignore
     }
 
